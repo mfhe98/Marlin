@@ -16,7 +16,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  *
  */
 
@@ -29,7 +29,7 @@ GCodeQueue queue;
 
 #include "gcode.h"
 
-#include "../lcd/ultralcd.h"
+#include "../lcd/marlinui.h"
 #include "../sd/cardreader.h"
 #include "../module/planner.h"
 #include "../module/temperature.h"
@@ -39,8 +39,12 @@ GCodeQueue queue;
   #include "../feature/leds/printer_event_leds.h"
 #endif
 
+#if HAS_ETHERNET
+  #include "../feature/ethernet.h"
+#endif
+
 #if ENABLED(BINARY_FILE_TRANSFER)
-  #include "../feature/binary_protocol.h"
+  #include "../feature/binary_stream.h"
 #endif
 
 #if ENABLED(POWER_LOSS_RECOVERY)
@@ -289,8 +293,8 @@ void GCodeQueue::ok_to_send() {
       while (NUMERIC_SIGNED(*p))
         SERIAL_ECHO(*p++);
     }
-    SERIAL_ECHOPAIR_P(SP_P_STR, int(planner.moves_free()));
-    SERIAL_ECHOPAIR(" B", int(BUFSIZE - length));
+    SERIAL_ECHOPAIR_P(SP_P_STR, int(planner.moves_free()),
+                      SP_B_STR, int(BUFSIZE - length));
   #endif
   SERIAL_EOL();
 }
@@ -312,15 +316,24 @@ void GCodeQueue::flush_and_request_resend() {
 }
 
 inline bool serial_data_available() {
-  return MYSERIAL0.available() || TERN0(HAS_MULTI_SERIAL, MYSERIAL1.available());
+  byte data_available = 0;
+  if (MYSERIAL0.available()) data_available++;
+  #ifdef SERIAL_PORT_2
+    const bool port2_open = TERN1(HAS_ETHERNET, ethernet.have_telnet_client);
+    if (port2_open && MYSERIAL1.available()) data_available++;
+  #endif
+  return data_available > 0;
 }
 
 inline int read_serial(const uint8_t index) {
   switch (index) {
     case 0: return MYSERIAL0.read();
-    #if HAS_MULTI_SERIAL
-      case 1: return MYSERIAL1.read();
-    #endif
+    case 1: {
+      #if HAS_MULTI_SERIAL
+        const bool port2_open = TERN1(HAS_ETHERNET, ethernet.have_telnet_client);
+        if (port2_open) return MYSERIAL1.read();
+      #endif
+    }
     default: return -1;
   }
 }
@@ -628,11 +641,10 @@ void GCodeQueue::advance() {
           #if ENABLED(SERIAL_STATS_DROPPED_RX)
             SERIAL_ECHOLNPAIR("Dropped bytes: ", MYSERIAL0.dropped());
           #endif
-
           #if ENABLED(SERIAL_STATS_MAX_RX_QUEUED)
             SERIAL_ECHOLNPAIR("Max RX Queue Size: ", MYSERIAL0.rxMaxEnqueued());
           #endif
-        #endif //  !defined(__AVR__) || !defined(USBCON)
+        #endif
 
         ok_to_send();
       }
